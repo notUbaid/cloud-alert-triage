@@ -1,0 +1,11 @@
+{
+  "task_id": "hard",
+  "title": "Cascading Failure Under Noise",
+  "description": "30 alerts across 15 services. 5 cascading incidents, 6 false alarms (one mislabeled CRITICAL), one stealth incident, cascade mechanic active.",
+  "difficulty": "hard",
+  "alert_count": 30,
+  "max_steps": 45,
+  "incident_count": 5,
+  "false_alarm_count": 6,
+  "expected_score_range": [0.40, 0.70]
+}

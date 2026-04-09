@@ -1,0 +1,46 @@
+name: cloud-alert-triage
+description: >
+  SRE alert triage environment where an AI agent classifies, correlates, and
+  remediates cloud infrastructure alerts across a 17-service microservice
+  dependency graph with cascading failures, stealth incidents, and noise.
+author: Better Call Coders
+version: "1.0.0"
+tags:
+  - openenv
+  - sre
+  - alert-triage
+  - incident-response
+  - reinforcement-learning
+
+observation_space:
+  type: dict
+  fields:
+    alerts: list[Alert]
+    service_map: dict[str, list[str]]
+    pending_count: int
+    step_number: int
+    max_steps: int
+    feedback: str
+
+action_space:
+  type: union
+  variants:
+    - triage: {alert_id: str, root_cause: str, severity: str, remediation: str}
+    - link_alerts: {alert_ids: list[str], incident_label: str}
+    - skip: {alert_id: str}
+
+reward_range: [0.001, 0.999]
+
+tasks:
+  - id: easy
+    description: "5 independent alerts, basic classification"
+    difficulty: easy
+    max_steps: 10
+  - id: medium
+    description: "15 alerts with 2 correlated incidents and 2 false alarms"
+    difficulty: medium
+    max_steps: 25
+  - id: hard
+    description: "30 alerts with 5 cascading incidents, 6 false alarms, stealth failure"
+    difficulty: hard
+    max_steps: 45

@@ -1,0 +1,12 @@
+{
+  "task_id": "easy",
+  "title": "Basic Alert Classification",
+  "description": "5 independent alerts from 5 different services. No incidents, no false alarms. Each alert has an unambiguous root cause.",
+  "difficulty": "easy",
+  "alert_count": 5,
+  "max_steps": 10,
+  "incident_count": 0,
+  "false_alarm_count": 0,
+  "cascade_enabled": false,
+  "expected_score_range": [0.85, 0.999]
+}
