@@ -47,21 +47,28 @@ def health():
 
 
 @app.post("/reset")
-def reset(req: ResetRequest):
+def reset(req: ResetRequest | None = None):
     global _initialized
     valid_tasks = ["easy", "medium", "hard"]
-    if req.task_id not in valid_tasks:
-        raise HTTPException(status_code=422, detail=f"Unknown task_id: {req.task_id}. Must be one of {valid_tasks}")
+    if req is None:
+        task_id = "easy"
+        seed = 42
+    else:
+        task_id = req.task_id
+        seed = req.seed
+    if task_id not in valid_tasks:
+        raise HTTPException(status_code=422, detail=f"Unknown task_id: {task_id}. Must be one of {valid_tasks}")
     _initialized = True
-    return env.reset(req.task_id, req.seed)
+    return env.reset(task_id, seed)
 
 
 @app.post("/step")
-def step(req: StepRequest):
+def step(req: StepRequest | None = None):
     if not _initialized:
         raise HTTPException(status_code=400, detail="Call /reset before /step")
     
-    result = env.step(req.model_dump(exclude_none=True))
+    action = req.model_dump(exclude_none=True) if req else {}
+    result = env.step(action)
     data = result.model_dump()
     
     # Normalize reward to strict (0, 1)
@@ -98,8 +105,10 @@ class GraderResponse:
 
 
 @app.post("/grader")
-def grader(req: dict) -> dict:
+def grader(req: dict | None = None) -> dict:
     """Return grader score - always safe_score(0.5) = 0.5"""
+    if req is None:
+        req = {}
     score = safe_score(0.5)
     task_name = req.get("task", "unknown")
     return {"task": task_name, "score": score, "is_success": score >= 0.5}
