@@ -112,3 +112,13 @@ def grader(req: dict | None = None) -> dict:
     score = safe_score(0.5)
     task_name = req.get("task", "unknown")
     return {"task": task_name, "score": score, "is_success": score >= 0.5}
+
+
+def main():
+    """Entry point for the server."""
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=7860)
+
+
+if __name__ == "__main__":
+    main()
