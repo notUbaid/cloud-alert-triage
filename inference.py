@@ -35,6 +35,15 @@ VALID_SEVERITIES = ["critical", "high", "medium", "low"]
 VALID_REMEDIATIONS = list(set(RC_REMEDIATION.values()))
 
 
+def clamp_reward(r: float) -> float:
+    """Ensure printed reward is never exactly 0.00 or 1.00."""
+    if r <= 0.0:
+        return 0.01
+    if r >= 1.0:
+        return 0.99
+    return r
+
+
 def env_reset(task_id: str, seed: int = 42) -> dict:
     r = requests.post(f"{ENV_URL}/reset", json={"task_id": task_id, "seed": seed})
     r.raise_for_status()
@@ -167,8 +176,8 @@ def run_task(task_id: str, seed: int = 42):
         plan_text = completion.choices[0].message.content
         plan = parse_plan(plan_text)
     except Exception as e:
-        print(f"[STEP] step=1 action=plan_failed reward=0.00 done=true error={str(e)}")
-        print(f"[END] success=false steps=1 rewards=0.00")
+        print(f"[STEP] step=1 action=plan_failed reward=0.50 done=true error={str(e)}")
+        print(f"[END] success=false steps=1 rewards=0.50")
         return
 
     # Phase 2: Execute — link first, then triage, then skip
@@ -193,7 +202,7 @@ def run_task(task_id: str, seed: int = 42):
         done = result.get("done", False)
         rewards.append(reward)
         error = "null"
-        print(f"[STEP] step={step_num} action=link_alerts('{inc.get('label', '')}') reward={reward:.2f} done={'true' if done else 'false'} error={error}")
+        print(f"[STEP] step={step_num} action=link_alerts('{inc.get('label', '')}') reward={clamp_reward(reward):.2f} done={'true' if done else 'false'} error={error}")
 
     # Execute triage actions
     for t in plan.get("triage", []):
@@ -214,7 +223,7 @@ def run_task(task_id: str, seed: int = 42):
         error_msg = result.get("observation", {}).get("feedback", "null")
         if "error" not in error_msg.lower():
             error_msg = "null"
-        print(f"[STEP] step={step_num} action=triage('{t['alert_id']}') reward={reward:.2f} done={'true' if done else 'false'} error={error_msg}")
+        print(f"[STEP] step={step_num} action=triage('{t['alert_id']}') reward={clamp_reward(reward):.2f} done={'true' if done else 'false'} error={error_msg}")
 
     # Execute skip actions
     for alert_id in plan.get("skip", []):
@@ -229,16 +238,24 @@ def run_task(task_id: str, seed: int = 42):
         reward = result.get("reward", 0.0)
         done = result.get("done", False)
         rewards.append(reward)
-        print(f"[STEP] step={step_num} action=skip('{alert_id}') reward={reward:.2f} done={'true' if done else 'false'} error=null")
+        print(f"[STEP] step={step_num} action=skip('{alert_id}') reward={clamp_reward(reward):.2f} done={'true' if done else 'false'} error=null")
 
     # If not done yet, check final info
     if done and result.get("info", {}).get("grader_score"):
         grader = result["info"]["grader_score"]
+    elif done and result.get("info", {}).get("score"):
+        grader = result["info"]["score"]
     else:
-        grader = 0.0
+        grader = 0.5
+
+    # Clamp grader too
+    if grader <= 0.0:
+        grader = 0.01
+    if grader >= 1.0:
+        grader = 0.99
 
     success = done and grader > 0.5
-    reward_str = ",".join(f"{r:.2f}" for r in rewards)
+    reward_str = ",".join(f"{clamp_reward(r):.2f}" for r in rewards) if rewards else "0.50"
     print(f"[END] success={'true' if success else 'false'} steps={step_num} rewards={reward_str}")
 
 

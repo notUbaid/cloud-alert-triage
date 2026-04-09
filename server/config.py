@@ -103,19 +103,3 @@ GRADER_WEIGHTS = {
 # Score clamping constants — CRITICAL: scores must be strictly in (0, 1)
 SCORE_MIN = 0.001
 SCORE_MAX = 0.999
-
-# Safe score normalizer - compress to [0.05, 0.95] band
-FLOOR = 0.05
-CEIL = 0.95
-
-
-def safe_score(value: float) -> float:
-    """Ultra-safe score normalizer - compress to [0.05, 0.95] band."""
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return 0.5
-    if value != value or value == float("inf") or value == float("-inf"):
-        return 0.5
-    value = max(0.0, min(1.0, value))
-    return 0.05 + 0.90 * value
