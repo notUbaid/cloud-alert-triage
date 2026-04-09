@@ -82,7 +82,8 @@ def compute_link_reward(
         else:
             reward -= 0.10  # incorrect pair
     
-    return reward
+    # Floor the reward to prevent huge negative penalties
+    return max(reward, -1.0)
 
 
 def compute_skip_reward(is_true_false_alarm: bool) -> float:

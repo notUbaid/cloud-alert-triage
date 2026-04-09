@@ -32,7 +32,8 @@ RC_REMEDIATION = {
 
 VALID_ROOT_CAUSES = list(RC_REMEDIATION.keys())
 VALID_SEVERITIES = ["critical", "high", "medium", "low"]
-VALID_REMEDIATIONS = list(set(RC_REMEDIATION.values()))
+# Use dict.fromkeys to preserve insertion order and remove duplicates
+VALID_REMEDIATIONS = list(dict.fromkeys(RC_REMEDIATION.values()))
 
 
 def clamp_reward(r: float) -> float:
@@ -221,7 +222,9 @@ def run_task(task_id: str, seed: int = 42):
         done = result.get("done", False)
         rewards.append(reward)
         error_msg = result.get("observation", {}).get("feedback", "null")
-        if "error" not in error_msg.lower():
+        if "error" in error_msg.lower():
+            error_msg = error_msg  # Keep actual error message
+        else:
             error_msg = "null"
         print(f"[STEP] step={step_num} action=triage('{t['alert_id']}') reward={clamp_reward(reward):.2f} done={'true' if done else 'false'} error={error_msg}")
 

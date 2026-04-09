@@ -151,16 +151,16 @@ def compute_grader_score(
     incident_f1 = _pair_set_f1(agent_incidents, true_incidents)
     
     # ── False alarm accuracy ──
-    if false_alarm_ids:
+    # FA accuracy = correctly identified as FA (skipped) + correctly identified as real (triaged)
+    if false_alarm_ids or real_alert_ids:
         fa_correct = 0
-        # Correctly skipped false alarms
+        # Correctly skipped false alarms (agent correctly identified it as FA)
         fa_correct += len(false_alarm_ids & skipped_alerts)
-        # Correctly triaged (not skipped) real alerts
+        # Correctly triaged real alerts (agent correctly identified it as real, not skipped)
         for aid in real_alert_ids:
-            if aid in agent_decisions or aid not in skipped_alerts:
-                if aid in agent_decisions:
-                    fa_correct += 1
-        fa_total = total_alerts
+            if aid in agent_decisions:
+                fa_correct += 1
+        fa_total = len(false_alarm_ids) + len(real_alert_ids)
         false_alarm_acc = fa_correct / fa_total if fa_total > 0 else 1.0
     else:
         false_alarm_acc = 1.0  # Vacuously correct
@@ -185,12 +185,14 @@ def compute_grader_score(
     # ── Stealth bonus (hard only) ──
     if task_id == "hard" and stealth_root_service:
         # Check if agent correctly identified the stealth root service
+        stealth_bonus_count = 0
         for aid, gt in ground_truth.items():
             if gt.get("is_stealth_root", False) and aid in agent_decisions:
                 dec = agent_decisions[aid]
                 if dec.get("root_cause") == gt["root_cause"]:
-                    score += 0.05
-                break
+                    stealth_bonus_count += 1
+        # Apply bonus per correct stealth root (capped at 0.05)
+        score += min(stealth_bonus_count * 0.05, 0.05)
     
     # ── CRITICAL: Clamp to strictly open interval (0.001, 0.999) ──
     return _clamp(score)
