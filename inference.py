@@ -177,7 +177,7 @@ def run_task(task_id: str, seed: int = 42):
         plan = parse_plan(plan_text)
     except Exception as e:
         print(f"[STEP] step=1 action=plan_failed reward=0.50 done=true error={str(e)}")
-        print(f"[END] success=false steps=1 rewards=0.50")
+        print(f"[END] success=false steps=1 score=0.500 rewards=0.50")
         return
 
     # Phase 2: Execute — link first, then triage, then skip
@@ -256,7 +256,7 @@ def run_task(task_id: str, seed: int = 42):
 
     success = done and grader > 0.5
     reward_str = ",".join(f"{clamp_reward(r):.2f}" for r in rewards) if rewards else "0.50"
-    print(f"[END] success={'true' if success else 'false'} steps={step_num} rewards={reward_str}")
+    print(f"[END] success={'true' if success else 'false'} steps={step_num} score={grader:.3f} rewards={reward_str}")
 
 
 if __name__ == "__main__":

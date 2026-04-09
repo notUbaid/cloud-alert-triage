@@ -129,9 +129,13 @@ class AlertTriageEnv:
             info["final_score"] = grader_score
         
         obs = self._make_observation(feedback)
+        # When episode ends, set reward to grader_score so validator sees valid score
+        final_reward = round(reward, 4)
+        if self.done and "grader_score" in info:
+            final_reward = info["grader_score"]
         return StepResponse(
             observation=obs,
-            reward=round(reward, 4),
+            reward=final_reward,
             done=self.done,
             info=info,
         ).model_dump()
