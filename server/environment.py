@@ -6,8 +6,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from .config import (
     CASCADE_TRIGGER_STEP, CASCADE_SECOND_WAVE_STEP, CASCADE_SEVERITIES,
     RootCause, Severity, Remediation, ROOT_CAUSE_REMEDIATION,
-    SCORE_MIN,
+    SCORE_MIN, TASK_CONFIGS,
 )
+
+# Valid values for action validation
+VALID_ROOT_CAUSES = {rc.value for rc in RootCause}
+VALID_SEVERITIES = {sev.value for sev in Severity}
+VALID_REMEDIATIONS = {rem.value for rem in Remediation}
 from .models import Observation, Alert, StepResponse
 from .scenario_generator import generate_scenario
 from .service_graph import SERVICE_MAP, get_dependents
@@ -40,7 +45,8 @@ class AlertTriageEnv:
         self.cascade_spawned: Set[str] = set()
         self.cascade_enabled: bool = False
         self.stealth_root_service: Optional[str] = None
-        self._cascade_done: bool = False
+        self._cascade_first_done: bool = False
+        self._cascade_second_done: bool = False
         self._alert_counter: int = 0
     
     def reset(self, task_id: str, seed: int = 42) -> Dict[str, Any]:
@@ -98,13 +104,13 @@ class AlertTriageEnv:
         self.step_number += 1
         
         # Cascade mechanic - two waves for more aggression
-        if self.cascade_enabled and not self._cascade_done:
-            if self.step_number >= CASCADE_TRIGGER_STEP:
+        if self.cascade_enabled:
+            if self.step_number >= CASCADE_TRIGGER_STEP and not self._cascade_first_done:
                 self._trigger_cascade()
-            elif self.step_number >= CASCADE_SECOND_WAVE_STEP:
-                # Second wave - spawn more from any remaining untriaged critical/high
+                self._cascade_first_done = True
+            elif self.step_number >= CASCADE_SECOND_WAVE_STEP and not self._cascade_second_done:
                 self._trigger_cascade(additional=True)
-                self._cascade_done = True
+                self._cascade_second_done = True
         
         # Check episode end
         pending = self._pending_count()
@@ -193,6 +199,14 @@ class AlertTriageEnv:
         root_cause = action.get("root_cause", "")
         severity = action.get("severity", "")
         remediation = action.get("remediation", "")
+        
+        # Validate enum values
+        if root_cause not in VALID_ROOT_CAUSES:
+            return -0.10, f"Invalid root_cause: {root_cause}. Valid: {sorted(VALID_ROOT_CAUSES)}"
+        if severity not in VALID_SEVERITIES:
+            return -0.10, f"Invalid severity: {severity}. Valid: {sorted(VALID_SEVERITIES)}"
+        if remediation not in VALID_REMEDIATIONS:
+            return -0.10, f"Invalid remediation: {remediation}. Valid: {sorted(VALID_REMEDIATIONS)}"
         
         gt = self.ground_truth.get(alert_id, {})
         
