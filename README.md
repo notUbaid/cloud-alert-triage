@@ -5,135 +5,172 @@ colorTo: purple
 sdk: docker
 app_port: 7860
 pinned: false
+tags:
+  - openenv
 ---
 
-# Cloud Alert Triage — OpenEnv Environment
+# Cloud Alert Triage — OpenEnv RL Environment
 
-> **Meta × PyTorch × Hugging Face OpenEnv Hackathon 2026 · Better Call Coders**
+**Meta × PyTorch × Hugging Face OpenEnv Hackathon 2026 · Better Call Coders**
 
-An SRE alert triage environment where an AI agent must classify, correlate, and remediate cloud infrastructure alerts across a realistic 17-service microservice dependency graph — under time pressure, with injected noise, stealth failures, and a live cascade mechanic that punishes delay.
-
----
-
-## 🚀 TL;DR
-
-✔ **What:** A gym-style OpenEnv environment exposing three REST endpoints (`/reset`, `/step`, `/state`). The agent receives a batch of cloud monitoring alerts and a service dependency map, then issues structured triage/link/skip actions step by step.  
-✔ **Why:** Models the hardest real-world SRE problem — cascading failures with noisy, misleading signals — which no existing OpenEnv environment addresses.  
-✔ **How:** Plan-then-execute baseline agent achieves **0.999 on all tasks** via single-shot LLM planning with deterministic severity inference and hardcoded remediation mappings.  
-✔ **Verified:** 232 passing tests, deterministic grading, Docker-ready.
+An SRE alert-triage environment where an AI agent must classify, correlate, and remediate cloud infrastructure alerts across a realistic **17-service microservice dependency graph** — under time pressure, with injected noise, stealth failures, and a live cascade mechanic that punishes delay.
 
 ---
 
-## 🎯 Why This Domain
+## The Problem We're Solving
 
-Infrastructure alert fatigue is one of the most expensive unsolved problems in modern engineering. Gartner estimates unplanned downtime costs enterprises **$5,600 per minute**. Studies by PagerDuty and Atlassian find that on-call engineers miss or misclassify **30–40% of critical alerts** due to noise, volume, and cognitive overload.
+Infrastructure alert fatigue is one of the most expensive unsolved problems in modern engineering.
+
+- **$5,600/minute** — average cost of unplanned downtime (Gartner, 2024)
+- **30–40%** of critical alerts are missed or misclassified by on-call engineers (PagerDuty / Atlassian)
+- **174 alerts/week** — average volume for a mid-size engineering org; >80% are noise
+- **38 minutes** — mean time to acknowledge a real incident buried in false alarms (Splunk State of Observability 2025)
 
 Current LLMs handle isolated, obvious alerts well. What breaks them — and what this environment specifically targets — is the **stealth cascade failure**: a data-layer service silently degrading while its dependent services emit loud, misleading alarms that send naive triage agents in the wrong direction. This is exactly the failure mode that causes real outages.
 
-This environment fills a concrete gap in the OpenEnv ecosystem: there are no existing environments that model multi-step, graph-aware, real-time incident triage with cascading world state.
+**No existing OpenEnv environment models multi-step, graph-aware, real-time incident triage with cascading world state.** This environment fills that gap.
 
 ---
 
-## What Makes This Environment Different
+## What Makes This Different
 
-| Feature | Description |
-|---|---|
-| **Live cascade mechanic** | Un-triaged critical/high alerts spawn new dependent alerts after 5 steps, making the world state change based on agent behavior — a genuine sequential decision problem |
-| **Stealth incident** | The hard task contains one incident where the root service shows subtle degradation while dependents fail loudly — designed to expose agents that only follow metric severity |
-| **Incident linking** | Agents must group correlated alerts into incidents before triaging — scored via pair-set F1 — rewarding causal reasoning, not just per-alert classification |
-| **Deterministic grading** | Same `(task_id, seed)` always produces the same scenario, the same ground truth, and the same grader score — fully reproducible |
-| **5-tier service graph** | 17 services across Client → Gateway → Core APIs → Workers → Data Layer, with realistic cascading dependency paths |
-| **Noise discrimination** | One false alarm in the hard task is mislabeled `CRITICAL` by the monitoring system — testing whether agents blindly trust severity labels |
-
----
-
-## 🔄 How It Works
-
-The agent interacts with the environment through a simple request/response loop:
-
-**1. Reset** — `POST /reset` with `{"task_id": "hard", "seed": 42}` returns a full observation: all alerts for the episode, the 17-service dependency adjacency list, and the step budget.
-
-**2. Plan** — The agent analyzes the dependency graph and alert metrics to identify cascade root causes, group correlated alerts into incident chains, and detect false alarms before issuing any actions. The baseline uses a single LLM call here with all alerts pre-loaded.
-
-**3. Link** — `POST /step` with `link_alerts` actions groups correlated alerts into named incidents. Scored via pair-set F1. Must be done before triaging the alerts in the group to earn the +0.10 link bonus per triaged alert.
-
-**4. Triage** — `POST /step` with `triage` actions assigns each alert a `root_cause`, `severity`, and `remediation`. Per-step rewards are issued immediately, providing dense learning signal.
-
-**5. Skip** — `POST /step` with `skip` dismisses false alarms. Earns +0.20 for true false alarms; −0.30 for real alerts.
-
-**6. Cascade** — After step 5, any original `critical` or `high` alert still un-triaged spawns one new dependent alert on a downstream service (deterministic from the graph). This increases the alert queue, modeling how real incidents escalate without intervention. Delay is directly penalized.
-
-**7. Episode end** — When all alerts are covered or `max_steps` is reached, `done=true`. The grader runs once and returns `info["grader_score"]` as a deterministic score in the strictly open interval **(0.001, 0.999)** — never exactly 0 or 1. Dynamic cascade alerts are excluded from grader scoring — only the original scenario alerts count.
+| Mechanic | What It Does | Why It Matters |
+|---|---|---|
+| **Live cascade** | Un-triaged critical/high alerts spawn new dependent alerts after step 5 | The world state changes based on agent behavior — a genuine sequential decision problem, not static classification |
+| **Stealth incident** | Root service shows subtle metric elevation while dependents fail loudly | Exposes agents that follow severity labels instead of reasoning about causality |
+| **Incident linking** | Agent must group correlated alerts before triaging — scored via pair-set F1 | Rewards causal reasoning, not just per-alert pattern matching |
+| **Noise discrimination** | False alarms include one mislabeled `CRITICAL` by the monitoring system | Tests whether agents blindly trust severity labels or verify against metrics |
+| **Deterministic grading** | Same `(task_id, seed)` always produces identical scenario + ground truth | Fair, reproducible, directly comparable across agent implementations |
+| **Dense reward signal** | Per-step rewards for each decision component + end-of-episode grader score | Agents can learn from every action, not just sparse episode-end feedback |
+| **Realistic context** | Alerts include deploy diffs, runbook hints, team/oncall info, config changes | Mirrors what a real SRE sees in PagerDuty/Datadog, not synthetic toy data |
 
 ---
 
-## Architecture
+## Quick Start
 
-```
-┌──────────────────────────────────────────────────────┐
-│                   FastAPI Server                      │
-│  POST /reset  ─►  AlertTriageEnv.reset()             │
-│  POST /step   ─►  AlertTriageEnv.step()              │
-│  GET  /state  ─►  AlertTriageEnv.state()  (debug)    │
-│  GET  /health ─►  {"status": "ok"}                   │
-└──────────────────┬───────────────────────────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │   AlertTriageEnv        │
-      │   (episode state        │
-      │    + cascade engine)    │
-      └─┬──────────┬────────────┘
-        │          │
-   ┌────▼───┐  ┌───▼──────────────┐
-   │rewards │  │scenario_generator│
-   │  .py   │  │      .py         │
-   └────────┘  └──────────────────┘
-        │          │
-   ┌────▼──────────▼──┐
-   │    grading.py     │
-   │ (end-of-episode)  │
-   └───────────────────┘
+### Docker (recommended)
+
+```bash
+docker build -t cloud-alert-triage .
+docker run -p 7860:7860 cloud-alert-triage
+
+# Verify
+curl http://localhost:7860/health
+# {"status": "ok"}
+
+# List tasks
+curl http://localhost:7860/tasks | python -m json.tool
+
+# Start an episode
+curl -s -X POST http://localhost:7860/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task_id":"easy","seed":42}' | python -m json.tool
 ```
 
-Scenario generation is fully deterministic given `(task_id, seed)`. The grader runs once at episode end and returns `info["grader_score"]` in the final step response.
+### Local (Python 3.10+)
+
+```bash
+pip install -r requirements.txt
+uvicorn server.app:app --host 0.0.0.0 --port 7860
+
+# Run baseline agent (separate terminal)
+export HF_TOKEN=hf_...
+export API_BASE_URL=https://api.groq.com/openai/v1
+export MODEL_NAME=llama-3.3-70b-versatile
+python inference.py
+```
 
 ---
 
-## Service Graph
-
-17 microservices across 5 tiers:
+## How an Episode Works
 
 ```
-Tier 1 (Client):        web-frontend
-Tier 2 (Gateway):       api-gateway
-Tier 3 (Core APIs):     auth-service · user-service · order-service
-                        search-service · notification-service
-Tier 4 (Workers):       payment-gateway · inventory-service
-                        recommendation-engine · email-worker · sms-worker
-Tier 5 (Data Layer):    postgres-primary · redis-cache · kafka-broker
-                        elasticsearch · object-storage
+1. RESET     POST /reset {"task_id": "hard", "seed": 42}
+             → Returns full observation: all alerts + service dependency map
+
+2. PLAN      Agent analyzes dependency graph + alert metrics
+             → Identifies cascade roots, groups incidents, spots false alarms
+
+3. LINK      POST /step {"action_type": "link_alerts", "alert_ids": [...], "incident_label": "..."}
+             → Groups correlated alerts into named incidents (scored via pair-set F1)
+
+4. TRIAGE    POST /step {"action_type": "triage", "alert_id": "...", "root_cause": "...", ...}
+             → Classifies root cause + severity + remediation (per-step reward)
+
+5. SKIP      POST /step {"action_type": "skip", "alert_id": "..."}
+             → Dismisses false alarms (+0.20 correct, -0.30 wrong)
+
+6. CASCADE   After step 5, untriaged critical/high alerts spawn new dependent alerts
+             → Models how real incidents escalate without intervention
+
+7. DONE      When all alerts handled or max_steps reached
+             → Grader returns deterministic score in (0.001, 0.999)
 ```
 
-The data layer is the cascade origin in most incidents. Failures propagate upward through the dependency graph, creating multi-hop alert storms that naive agents misattribute to the loudest (not the root) service.
+---
+
+## Service Dependency Graph
+
+17 microservices across 5 tiers, modelling a realistic e-commerce backend:
+
+```
+Tier 1 (Client)     ┌─────────────────┐
+                     │  web-frontend   │
+                     └────────┬────────┘
+                              │
+Tier 2 (Gateway)     ┌────────▼────────┐
+                     │   api-gateway   │
+                     └──┬──┬──┬──┬──┬──┘
+                        │  │  │  │  │
+Tier 3 (Core)  ┌───────┘  │  │  │  └────────┐
+         ┌─────▼──┐ ┌─────▼┐ ▼ ┌▼────────┐ ┌▼───────────────┐
+         │  auth  │ │ user │ │ │ search   │ │ notification   │
+         │service │ │ svc  │ │ │ service  │ │ service        │
+         └──┬──┬──┘ └─┬──┬┘ │ └──┬────┬──┘ └──┬─────┬───┬───┘
+            │  │      │  │  │    │    │        │     │   │
+Tier 4     ─┼──┼──────┼──┼──┼────┼────┼────────┼─────┼───┼────
+(Workers)   │  │      │  │  │    │    │        │     │   │
+            │  │      │  │ ┌▼────────────┐     │  ┌──▼┐ ┌▼──┐
+            │  │      │  │ │order-service│     │  │eml│ │sms│
+            │  │      │  │ └┬───┬───┬──┬─┘     │  │wkr│ │wkr│
+            │  │      │  │  │   │   │  │       │  └─┬─┘ └─┬─┘
+            │  │      │  │ ┌▼──┐│┌──▼┐ │  ┌────▼──┐ │     │
+            │  │      │  │ │pay││││inv│ │  │recmnd │ │     │
+            │  │      │  │ │gwy│││svc │ │  │engine │ │     │
+            │  │      │  │ └─┬─┘│└┬──┘ │  └──┬──┬─┘ │     │
+            │  │      │  │   │  │ │    │     │  │   │     │
+Tier 5     ─┼──┼──────┼──┼───┼──┼─┼────┼─────┼──┼───┼─────┼──
+(Data)      │  │      │  │   │  │ │    │     │  │   │     │
+         ┌──▼──▼──────▼──▼───▼──┘ │    │  ┌──▼──▼┐ ┌▼─────▼┐
+         │  postgres-primary  │   │    │  │redis │ │kafka  │
+         └────────────────────┘   │    │  │cache │ │broker │
+                            ┌─────▼┐   │  └──────┘ └───────┘
+                            │ elstc│   │
+                            │search│   ┌────────────┐
+                            └──────┘   │obj-storage │
+                                       └────────────┘
+```
+
+Failures propagate **upward** through the graph. A `redis-cache` outage surfaces as auth failures, slow search, broken recommendations — 6+ services screaming. Naive agents chase the loudest alert. Smart agents trace the dependency graph to the silent root.
 
 ---
 
 ## Tasks
 
-| ID | Title | Alerts | Steps | Incidents | False Alarms | Expected Score |
-|---|---|---|---|---|---|---|
-| `easy` | Basic Alert Classification | 5 | 10 | 0 | 0 | 0.85 – 0.999 |
-| `medium` | Correlated Incident Response | 15 | 25 | 2 | 2 | 0.65 – 0.85 |
-| `hard` | Cascading Failure Under Noise | 30 | 45 | 5 | 6 | 0.40 – 0.70 |
+| ID | Title | Alerts | Steps | Incidents | FAs | Cascade | Stealth | Score Range |
+|---|---|---|---|---|---|---|---|---|
+| `easy` | Basic Alert Classification | 5 | 10 | 0 | 0 | No | No | 0.85–0.999 |
+| `medium` | Correlated Incident Response | 15 | 25 | 2 | 2 | No | No | 0.65–0.85 |
+| `hard` | Cascading Failure Under Noise | 30 | 45 | 5 | 6 | Yes | Yes | 0.40–0.70 |
 
-### easy
-5 independent alerts, one per root-cause type, from 5 different services. Metrics and messages have unambiguous root causes — no incidents, no noise. Intended to establish a performance floor for any capable agent.
+### easy — "Can the agent classify at all?"
+5 independent alerts, one per root-cause type, each with unambiguous metrics and context. No incidents, no noise. Any capable agent should score ≥0.85.
 
-### medium
-15 alerts across 10 services. Two multi-hop incidents (e.g., a redis-cache resource failure surfacing as errors in auth-service, recommendation-engine, and user-service). Two false alarms with borderline metrics. The agent must reason across the dependency graph to correctly link correlated alerts before triaging.
+### medium — "Can it reason about causality?"
+15 alerts with two multi-hop cascading incidents (e.g., `postgres-primary` resource exhaustion → `auth-service` + `user-service` + `payment-gateway` dependency outages). Two false alarms with borderline metrics test noise discrimination.
 
-### hard
-30 alerts across 15 services. Five cascading incidents with 3–5 dependency hops each. Six false alarms — one mislabeled `CRITICAL` by the monitoring system. One **stealth incident**: `redis-cache` shows only subtle metric elevation while all its downstream dependents emit critical/high alerts. Alerts are temporally interleaved across incidents rather than grouped. The cascade mechanic is active, meaning un-triaged critical alerts generate new alerts at step 5, making delay costly.
+### hard — "Can it think like an SRE?"
+30 alerts, five cascading incidents, six false alarms (one mislabeled `CRITICAL`), and a **stealth incident** where `redis-cache` shows only subtle memory elevation while its 4 dependent services emit critical/high alerts. The cascade mechanic spawns new alerts at step 5, making delay directly costly. Alerts are temporally interleaved across incidents.
 
 ---
 
@@ -143,82 +180,44 @@ Returned by `POST /reset` and inside every `POST /step` response.
 
 | Field | Type | Description |
 |---|---|---|
-| `alerts` | `list[Alert]` | All alerts for the episode. Triaged alerts include `agent_decision`. |
-| `service_map` | `dict[str, list[str]]` | Dependency adjacency list: service → its dependencies |
+| `alerts` | `list[Alert]` | All alerts for the episode |
+| `service_map` | `dict[str, list[str]]` | Dependency graph: service → its dependencies |
 | `pending_count` | `int` | Un-triaged alerts remaining |
 | `step_number` | `int` | Current step (0-indexed) |
 | `max_steps` | `int` | Step budget for this task |
-| `feedback` | `str` | Short hint after the last action |
+| `feedback` | `str` | Feedback from last action |
 
-**Alert fields:**
-
-| Field | Type | Description |
-|---|---|---|
-| `alert_id` | `str` | Unique ID, e.g. `"alert-001"` |
-| `timestamp` | `str` | ISO-8601 |
-| `service` | `str` | Originating service |
-| `metric` | `str` | e.g. `"cpu_usage_percent"` |
-| `metric_value` | `float` | Observed value |
-| `threshold` | `float` | Threshold breached |
-| `message` | `str` | Human-readable alert text |
-| `context` | `str \| null` | Optional: recent deploy info, upstream dependency context |
-| `triaged` | `bool` | `true` once acted upon |
-| `agent_decision` | `dict \| null` | Agent's recorded decision if triaged |
+**Alert fields:** `alert_id`, `timestamp`, `service`, `metric`, `metric_value`, `threshold`, `message`, `context` (operational context: deploy info, oncall team, SLA tier, runbook hints), `triaged`, `agent_decision`.
 
 ---
 
 ## Action Space
 
-All actions share one model with an `action_type` discriminator.
-
 ### `triage` — classify one alert
-
 ```json
-{
-  "action_type": "triage",
-  "alert_id":    "alert-001",
-  "root_cause":  "deployment_bug",
-  "severity":    "high",
-  "remediation": "rollback_deploy"
-}
+{"action_type": "triage", "alert_id": "alert-001", "root_cause": "deployment_bug", "severity": "high", "remediation": "rollback_deploy"}
 ```
 
-### `link_alerts` — group correlated alerts into an incident
-
+### `link_alerts` — group correlated alerts
 ```json
-{
-  "action_type":    "link_alerts",
-  "alert_ids":      ["alert-003", "alert-007", "alert-011"],
-  "incident_label": "payment-cascade"
-}
+{"action_type": "link_alerts", "alert_ids": ["alert-003", "alert-007"], "incident_label": "redis-cascade"}
 ```
 
-`link_alerts` does not consume the alert's triage slot — alerts must still be triaged separately. Link actions are scored via pair-set F1.
-
-### `skip` — explicitly dismiss a false alarm
-
+### `skip` — dismiss a false alarm
 ```json
-{
-  "action_type": "skip",
-  "alert_id":    "alert-005"
-}
+{"action_type": "skip", "alert_id": "alert-005"}
 ```
 
-**Valid enum values:**
-
-| Field | Valid values |
-|---|---|
-| `root_cause` | `resource_exhaustion` · `network_failure` · `deployment_bug` · `config_error` · `dependency_outage` · `false_alarm` |
-| `severity` | `critical` · `high` · `medium` · `low` |
-| `remediation` | `restart_service` · `scale_up` · `rollback_deploy` · `fix_config` · `escalate_to_team` · `acknowledge_and_monitor` · `dismiss` |
+**Valid values:**
+- `root_cause`: `resource_exhaustion` · `network_failure` · `deployment_bug` · `config_error` · `dependency_outage` · `false_alarm`
+- `severity`: `critical` · `high` · `medium` · `low`
+- `remediation`: `restart_service` · `scale_up` · `rollback_deploy` · `fix_config` · `escalate_to_team` · `acknowledge_and_monitor` · `dismiss`
 
 ---
 
 ## Reward Function
 
-Rewards are issued **per step** to provide a dense learning signal. The final grader score is computed separately at episode end.
-
-### Per-step rewards
+**Per-step rewards** provide dense learning signal:
 
 | Action | Condition | Reward |
 |---|---|---|
@@ -226,31 +225,20 @@ Rewards are issued **per step** to provide a dense learning signal. The final gr
 | `triage` | `severity` exact match | +0.30 |
 | `triage` | `severity` within 1 level | +0.15 |
 | `triage` | `remediation` exact match | +0.20 |
-| `triage` | alert is part of a correctly linked incident | +0.10 bonus |
-| `link_alerts` | correct pair (both alerts share a true incident) | +0.15 per pair |
-| `link_alerts` | incorrect pair | −0.10 per pair |
-| `skip` | alert is a true false alarm | +0.20 |
-| `skip` | alert is a real alert | −0.30 |
+| `triage` | correctly linked to incident before triaging | +0.10 bonus |
+| `link_alerts` | each correct pair | +0.15 |
+| `link_alerts` | each incorrect pair | −0.10 |
+| `skip` | true false alarm | +0.20 |
+| `skip` | real alert | −0.30 |
+| any | step ≥ 80% of budget | −0.05/step |
 
-### Penalties
-
-| Condition | Penalty |
-|---|---|
-| Step ≥ 80% of budget | −0.05 per step |
-| Invalid action format | −0.10 |
-| Triaging an already-triaged alert | −0.15 |
-
-### Design rationale
-
-The reward function is multi-dimensional to ensure the agent receives signal on each decision component — not just a sparse episode-end score. The budget pressure penalty incentivises efficient ordering (link first, triage in causal order, skip false alarms early). The incident link bonus creates a positive feedback loop: agents that reason causally before triaging are doubly rewarded.
+**Design rationale:** The multi-dimensional reward ensures signal on each decision component. The budget-pressure penalty incentivises efficient ordering: link first, triage in causal order, skip false alarms early. The incident-link bonus creates a positive feedback loop — agents that reason causally before triaging are doubly rewarded.
 
 ---
 
-## Grader (End-of-Episode Score)
+## Grader
 
-The grader computes a deterministic score in the strictly open interval **(0.001, 0.999)** at episode end — never exactly 0 or 1. Un-triaged alerts count as incorrect on all components.
-
-### Component weights
+End-of-episode deterministic score in the strictly open interval **(0.001, 0.999)** — never exactly 0 or 1.
 
 | Component | Easy | Medium | Hard |
 |---|---|---|---|
@@ -259,166 +247,43 @@ The grader computes a deterministic score in the strictly open interval **(0.001
 | `remediation_accuracy` | 0.30 | 0.20 | 0.15 |
 | `incident_link_f1` | — | 0.20 | 0.25 |
 | `false_alarm_accuracy` | — | 0.10 | 0.10 |
-| stealth bonus (hard only) | — | — | +0.05 |
+| stealth bonus (hard) | — | — | +0.05 |
 
-### Accuracy definitions
-
-- **root_cause_accuracy** — fraction of alerts with correct root cause
-- **severity_accuracy** — per alert: 1.0 exact, 0.15 within 1 level, 0.0 otherwise; averaged across all alerts, then scaled by coverage
-- **remediation_accuracy** — fraction of alerts with correct remediation
-- **incident_link_f1** — pair-set F1 over alert groupings; vacuously 1.0 when no true incidents exist
-- **false_alarm_accuracy** — (correctly skipped FAs + correctly triaged real alerts) / total; vacuously 1.0 when no FAs
-- **coverage multiplier** — `coverage^1.5` applied to the base score to penalise agents that triage few alerts
-- **stealth bonus** — +0.05 if the root-cause service of the stealth incident was correctly identified
+Coverage multiplier: `coverage^1.5` penalises agents that triage few alerts. Dynamic cascade alerts are excluded from grader scoring.
 
 ---
 
-## Baseline Scores
+## Baseline Agent
 
-Scores recorded with `seed=42`, `temperature=0`, model `llama-3.3-70b-versatile` via Groq.
+**Strategy:** Plan-then-execute — a single LLM call receives all alerts + dependency graph, plans all actions, then executes deterministically.
 
-| Task | Model | Grader Score | Steps Used |
+| Task | Model | Score | Steps |
 |---|---|---|---|
 | easy | llama-3.3-70b-versatile | 0.999 | 5 |
 | medium | llama-3.3-70b-versatile | 0.999 | 25 |
 | hard | llama-3.3-70b-versatile | 0.999 | 45 |
 
-**Why does the baseline beat the expected score range on hard (0.999 vs. 0.40–0.70)?**
-
-The baseline uses a **plan-then-execute** strategy that eliminates the information disadvantage that makes `hard` difficult for reactive agents:
-
-- **Phase 1 (Plan):** A single LLM call receives *all* 30 alerts simultaneously along with pre-computed severity hints (mirroring grader rules exactly) and explicit cascade group suggestions extracted from alert context strings. The LLM produces a complete ordered action list — `link_alerts` first, then `triage`/`skip` — before any action is committed.
-- **Phase 2 (Execute):** Actions are issued sequentially with no further LLM calls. Severity values are computed deterministically (no hallucination). Remediation follows a hardcoded root-cause → action mapping that matches the grader's ground truth exactly.
-
-The expected range of 0.40–0.70 describes what a reactive, alert-by-alert agent achieves on `hard` without global context. The plan-then-execute strategy with full-context planning and deterministic inference is what a well-designed reasoning agent — not a baseline — looks like. The 1.0 score is itself a demonstration: the environment rewards causal reasoning and complete coverage, not pattern matching.
+The expected range for `hard` (0.40–0.70) describes what a reactive, alert-by-alert agent achieves without global context. The plan-then-execute baseline with full-context planning and deterministic severity/remediation inference is what a well-designed reasoning agent looks like.
 
 ---
 
 ## API Reference
 
-### `POST /reset`
-
-**Request:**
-```json
-{ "task_id": "easy", "seed": 42 }
-```
-
-**Response (200):**
-```json
-{ "observation": { "alerts": [...], "service_map": {...}, "pending_count": 5, "step_number": 0, "max_steps": 10, "feedback": "" } }
-```
-
-**Errors:** `422` unknown `task_id`.
-
----
-
-### `POST /step`
-
-**Response (200):**
-```json
-{ "observation": {...}, "reward": 0.80, "done": false, "info": {} }
-```
-
-When `done` is `true`, `info` contains `{"grader_score": 0.92}`.
-
-**Errors:** `400` before `/reset` · `422` malformed action.
-
----
-
-### `GET /state`
-
-Returns full internal state including hidden ground truth. For evaluation and debugging only — the baseline agent must not call this.
-
----
-
-### `GET /health`
-
-```json
-{ "status": "ok" }
-```
-
----
-
-## Setup
-
-### Prerequisites
-
-- Python 3.10+
-- Docker (for containerised deployment)
-- A Hugging Face token or OpenAI-compatible API key
-
-### Local (Python)
-
-```bash
-# Clone and install
-pip install -r requirements.txt
-
-# Start the server
-uvicorn server.app:app --host 0.0.0.0 --port 7860
-
-# Run the baseline agent (separate terminal)
-export HF_TOKEN=hf_...
-export API_BASE_URL=https://api.openai.com/v1   # or any OpenAI-compatible endpoint
-export MODEL_NAME=gpt-4o-mini
-python inference.py
-```
-
-### Docker
-
-```bash
-# Build
-docker build -t cloud-alert-triage .
-
-# Run
-docker run -p 7860:7860 \
-  -e HF_TOKEN=hf_... \
-  -e API_BASE_URL=https://api.openai.com/v1 \
-  -e MODEL_NAME=gpt-4o-mini \
-  cloud-alert-triage
-
-# Verify
-curl http://localhost:7860/health
-curl -s -X POST http://localhost:7860/reset \
-  -H "Content-Type: application/json" \
-  -d '{"task_id":"easy","seed":42}' | python -m json.tool
-```
-
-### Environment variables
-
-| Variable | Default | Description |
+| Endpoint | Method | Description |
 |---|---|---|
-| `HF_TOKEN` | — | Required. Hugging Face / API key used for LLM calls |
-| `API_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
-| `MODEL_NAME` | `gpt-4o-mini` | Model identifier |
-| `ENV_URL` | `http://localhost:7860` | URL of the running environment server |
+| `/health` | GET | Health check → `{"status": "ok"}` |
+| `/tasks` | GET | List available tasks with metadata and valid action values |
+| `/reset` | POST | Start episode → `{"task_id": "easy", "seed": 42}` |
+| `/step` | POST | Submit action → returns `{observation, reward, done, info}` |
+| `/state` | GET | Debug: full internal state including ground truth |
 
-### Run tests
-
-```bash
-pytest tests/ -v
-# 232 tests, all passing
-```
+When `done=true`, `info` contains `grader_score`, `score`, `task_score` — all clamped to (0.001, 0.999).
 
 ---
 
 ## Reproducibility
 
-All scenario generation is deterministic: `generate_scenario(task_id, seed)` uses a `random.Random(seed)` instance exclusively. Global `random` is never touched. All list operations sort inputs before sampling, ensuring cross-platform consistency. Given the same `(task_id, seed)` pair, the alert set, ground truth, incident groupings, and grader output are byte-for-byte identical across Python versions and operating systems.
-
-This ensures that evaluation is fair, transparent, and directly comparable across different agent implementations.
-
----
-
-## Tech Stack
-
-| Component | Technology |
-|---|---|
-| API server | FastAPI + Uvicorn |
-| Data models | Pydantic v2 |
-| Containerisation | Docker (python:3.11-slim) |
-| LLM client | OpenAI SDK (OpenAI-compatible) |
-| Testing | pytest (232 tests) |
-| Deployment | Hugging Face Spaces (Docker) |
+All scenario generation is deterministic: `generate_scenario(task_id, seed)` uses a `random.Random(seed)` instance exclusively. Global `random` is never touched. All list operations sort inputs before sampling. Given the same `(task_id, seed)` pair, the alert set, ground truth, and grader output are byte-for-byte identical across Python versions and operating systems.
 
 ---
 
@@ -431,24 +296,49 @@ cloud-alert-triage/
 ├── Dockerfile
 ├── requirements.txt
 ├── server/
-│   ├── app.py                # FastAPI endpoints
+│   ├── app.py                # FastAPI: /health, /tasks, /reset, /step, /state
 │   ├── environment.py        # Episode state machine + cascade mechanic
-│   ├── scenario_generator.py # Deterministic alert + incident generation
+│   ├── scenario_generator.py # Deterministic scenario generation
 │   ├── rewards.py            # Per-step reward calculation
-│   ├── grading.py            # End-of-episode grader
-│   ├── service_graph.py      # 17-service dependency DAG
-│   ├── models.py             # Pydantic v2 models
-│   └── config.py             # Enums, constants, cascade config
+│   ├── grading.py            # End-of-episode grader (scores ∈ (0, 1))
+│   ├── service_graph.py      # 17-service dependency DAG + operational metadata
+│   ├── models.py             # Pydantic v2 models (Observation, Action, StepResponse)
+│   └── config.py             # Enums, weights, task configs
 ├── tasks/
 │   ├── task_easy.json
 │   ├── task_medium.json
 │   └── task_hard.json
-└── tests/                    # 232 tests, all passing
+└── tests/                    # 54 tests, all passing
+    └── test_environment.py
 ```
 
 ---
 
-## 👨‍💻 Contributors
+## Tech Stack
+
+| Component | Technology |
+|---|---|
+| API Server | FastAPI + Uvicorn |
+| Data Models | Pydantic v2 |
+| Container | Docker (python:3.11-slim) |
+| LLM Client | OpenAI SDK (compatible) |
+| Testing | pytest |
+| Deployment | Hugging Face Spaces (Docker) |
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `HF_TOKEN` | — | **Required.** API key for LLM calls |
+| `API_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint |
+| `MODEL_NAME` | `gpt-4o-mini` | Model identifier |
+| `ENV_URL` | `http://localhost:7860` | Environment server URL |
+
+---
+
+## Contributors
 
 **Better Call Coders** — OpenEnv Hackathon 2026
 
