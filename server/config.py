@@ -44,8 +44,9 @@ ROOT_CAUSE_REMEDIATION: Dict[RootCause, Remediation] = {
 }
 
 # ── Cascade config ──
-CASCADE_TRIGGER_STEP = 5  # After this step, untriaged critical/high alerts cascade
-CASCADE_SEVERITIES = {Severity.CRITICAL, Severity.HIGH}
+CASCADE_TRIGGER_STEP = 3  # After step 3, untriaged alerts start cascading
+CASCADE_SECOND_WAVE_STEP = 8  # Second wave at step 8 for more aggression
+CASCADE_SEVERITIES = {Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM}  # MEDIUM also cascades now
 
 # ── Task definitions ──
 TASK_CONFIGS = {

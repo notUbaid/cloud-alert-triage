@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .config import (
-    CASCADE_TRIGGER_STEP, CASCADE_SEVERITIES,
+    CASCADE_TRIGGER_STEP, CASCADE_SECOND_WAVE_STEP, CASCADE_SEVERITIES,
     RootCause, Severity, Remediation, ROOT_CAUSE_REMEDIATION,
     SCORE_MIN,
 )
@@ -97,12 +97,14 @@ class AlertTriageEnv:
         
         self.step_number += 1
         
-        # Cascade mechanic
-        if (self.cascade_enabled and 
-            self.step_number >= CASCADE_TRIGGER_STEP and 
-            not self._cascade_done):
-            self._trigger_cascade()
-            self._cascade_done = True
+        # Cascade mechanic - two waves for more aggression
+        if self.cascade_enabled and not self._cascade_done:
+            if self.step_number >= CASCADE_TRIGGER_STEP:
+                self._trigger_cascade()
+            elif self.step_number >= CASCADE_SECOND_WAVE_STEP:
+                # Second wave - spawn more from any remaining untriaged critical/high
+                self._trigger_cascade(additional=True)
+                self._cascade_done = True
         
         # Check episode end
         pending = self._pending_count()
@@ -259,13 +261,28 @@ class AlertTriageEnv:
         feedback = f"Skipped {alert_id}" + (" (correct — false alarm)" if is_fa else " (WRONG — real alert)")
         return reward, feedback
     
-    def _trigger_cascade(self):
-        """Spawn new dependent alerts for untriaged critical/high alerts."""
-        rng = random.Random(self.seed + 1000)
+    def _trigger_cascade(self, additional: bool = False):
+        """Spawn new dependent alerts for untriaged alerts.
+        
+        Args:
+            additional: If True, this is the second wave (step 8+) - spawn more aggressively
+        """
+        rng = random.Random(self.seed + 1000 + (100 if additional else 0))
         base_time = datetime(2026, 4, 10, 3, 30, 0)
         
         new_alerts = []
+        
+        # On first wave: spawn for all untriaged critical/high
+        # On second wave (additional): also include medium, spawn more
+        target_severities = CASCADE_SEVERITIES.copy()
+        if additional:
+            target_severities.add(Severity.MEDIUM)
+        
         for alert in self.alerts:
+            # Skip already spawned cascade alerts on first wave
+            if not additional and alert["alert_id"] in self.cascade_spawned:
+                continue
+            
             if alert["triaged"]:
                 continue
             
@@ -275,7 +292,7 @@ class AlertTriageEnv:
             except ValueError:
                 continue
             
-            if sev not in CASCADE_SEVERITIES:
+            if sev not in target_severities:
                 continue
             
             # Find a dependent service
